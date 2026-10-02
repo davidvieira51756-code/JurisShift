@@ -191,3 +191,13 @@ CREATE TABLE IF NOT EXISTS gold_labels (
     FOREIGN KEY(issue_slug)
         REFERENCES issues(slug)
 );
+
+CREATE TABLE IF NOT EXISTS corpus_membership (
+    case_id INTEGER NOT NULL,
+    issue_slug TEXT NOT NULL,
+    inclusion_method TEXT NOT NULL,
+    inclusion_note TEXT,
+    PRIMARY KEY (case_id, issue_slug),
+    FOREIGN KEY (case_id) REFERENCES cases(id),
+    FOREIGN KEY (issue_slug) REFERENCES issues(slug)
+);
