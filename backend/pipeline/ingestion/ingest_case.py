@@ -50,12 +50,6 @@ def main():
         args.url,
     )
 
-    if not case.ecli:
-        raise RuntimeError(
-            "O acórdão não possui ECLI. "
-            "Não será guardado."
-        )
-
     if not case.full_text:
         raise RuntimeError(
             "O acórdão não possui texto integral. "
@@ -64,21 +58,48 @@ def main():
 
     print("[3/3] A guardar na base de dados...")
 
-    case_id = save_case(case)
+    case_id = save_case(
+        case
+    )
 
-    saved = get_case(case_id)
+    saved = get_case(
+        case_id
+    )
 
     print()
     print("=" * 70)
     print("ACÓRDÃO GUARDADO")
     print("=" * 70)
 
-    print(f"ID:            {saved['id']}")
-    print(f"ECLI:          {saved['ecli']}")
-    print(f"Processo:      {saved['process_number']}")
-    print(f"Data:          {saved['decision_date']}")
-    print(f"Relator:       {saved['rapporteur']}")
-    print(f"Secção:        {saved['section']}")
+    print(
+        f"ID:            "
+        f"{saved['id']}"
+    )
+
+    print(
+        f"ECLI:          "
+        f"{saved['ecli'] or 'não disponível'}"
+    )
+
+    print(
+        f"Processo:      "
+        f"{saved['process_number'] or 'não disponível'}"
+    )
+
+    print(
+        f"Data:          "
+        f"{saved['decision_date'] or 'não disponível'}"
+    )
+
+    print(
+        f"Relator:       "
+        f"{saved['rapporteur'] or 'não disponível'}"
+    )
+
+    print(
+        f"Secção:        "
+        f"{saved['section'] or 'não disponível'}"
+    )
 
     print(
         f"Descritores:   "
@@ -91,7 +112,9 @@ def main():
     )
 
     print()
-    print(f"Saved case #{case_id}")
+    print(
+        f"Saved case #{case_id}"
+    )
 
 
 if __name__ == "__main__":

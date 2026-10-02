@@ -21,7 +21,9 @@ def save_case(case: StjCase) -> int:
         ensure_ascii=False,
     )
 
-    text_hash = _hash_text(case.full_text)
+    text_hash = _hash_text(
+        case.full_text
+    )
 
     fetched_at = datetime.now(
         timezone.utc
@@ -53,8 +55,9 @@ def save_case(case: StjCase) -> int:
                 ?, ?, ?, ?, ?, ?, ?, ?
             )
 
-            ON CONFLICT(ecli)
+            ON CONFLICT(source_url)
             DO UPDATE SET
+                ecli = excluded.ecli,
                 process_number = excluded.process_number,
                 court = excluded.court,
                 section = excluded.section,
@@ -68,7 +71,6 @@ def save_case(case: StjCase) -> int:
                 summary = excluded.summary,
                 full_text = excluded.full_text,
                 text_hash = excluded.text_hash,
-                source_url = excluded.source_url,
                 fetched_at = excluded.fetched_at
             """,
             (
@@ -95,9 +97,11 @@ def save_case(case: StjCase) -> int:
             """
             SELECT id
             FROM cases
-            WHERE ecli = ?
+            WHERE source_url = ?
             """,
-            (case.ecli,),
+            (
+                case.source_url,
+            ),
         ).fetchone()
 
         connection.commit()
@@ -113,7 +117,9 @@ def get_case(case_id: int) -> dict | None:
             FROM cases
             WHERE id = ?
             """,
-            (case_id,),
+            (
+                case_id,
+            ),
         ).fetchone()
 
     if row is None:
@@ -122,7 +128,10 @@ def get_case(case_id: int) -> dict | None:
     result = dict(row)
 
     result["descriptors"] = json.loads(
-        result.pop("descriptors_json") or "[]"
+        result.pop(
+            "descriptors_json"
+        )
+        or "[]"
     )
 
     return result
