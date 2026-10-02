@@ -1,0 +1,21 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Environment
+.env
+
+# Local data
+data/raw/*
+data/cache/*
+data/*.db
+
+# IDE
+.vscode/
+.idea/
+
+# Frontend
+node_modules/
+dist/
