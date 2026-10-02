@@ -1,0 +1,18 @@
+{
+  "slug": "loan-prescription-acceleration",
+  "title": "Prescrição do mútuo após vencimento antecipado",
+  "question": "Num contrato de mútuo em que o capital é amortizado em prestações pagáveis com juros, o vencimento antecipado das prestações altera o prazo de prescrição de cinco anos previsto no artigo 310.º, alínea e), do Código Civil?",
+  "source": "Acórdão do Supremo Tribunal de Justiça n.º 6/2022",
+  "positions": [
+    {
+      "id": "loan-prescription-five-year",
+      "label": "Mantém-se o prazo de cinco anos",
+      "description": "O vencimento antecipado não transforma a dívida numa obrigação sujeita ao prazo ordinário. Mantém-se o prazo de cinco anos do artigo 310.º, alínea e), do Código Civil, contando-se o prazo relativamente às quotas antecipadamente vencidas a partir da data do vencimento antecipado."
+    },
+    {
+      "id": "loan-prescription-twenty-year",
+      "label": "Passa a aplicar-se o prazo ordinário",
+      "description": "O vencimento antecipado concentra a dívida numa obrigação única, deixando de se aplicar o prazo de cinco anos das quotas de amortização e passando a aplicar-se o prazo ordinário de prescrição."
+    }
+  ]
+}
