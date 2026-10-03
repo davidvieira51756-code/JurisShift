@@ -6,6 +6,7 @@ import {
   FileSearch,
   Landmark,
   Scale,
+  X,
 } from 'lucide-react'
 import {
   CartesianGrid,
@@ -95,6 +96,48 @@ type CaseItem = {
   } | null
 }
 
+type CaseDetail = {
+  id: number
+  ecli: string | null
+  process_number: string
+  court: string | null
+  section: string | null
+  area: string | null
+  decision_date: string | null
+  rapporteur: string | null
+  procedural_type: string | null
+  decision: string | null
+  voting: string | null
+  source_url: string
+  issue: {
+    slug: string
+    title: string
+    question: string
+    source: string
+  } | null
+  position: {
+    id: string
+    label: string
+    description: string
+  } | null
+  decides_issue: boolean
+  status: string | null
+  model: string | null
+  prompt_version: string | null
+  evidence: {
+    id: number
+    quote: string
+    role: string
+    verified: boolean
+    context: {
+      source: string
+      before: string
+      quote: string
+      after: string
+    } | null
+  } | null
+}
+
 type CasesResponse = {
   total: number
   cases: CaseItem[]
@@ -107,8 +150,26 @@ function App() {
   const [timeline, setTimeline] = useState<Timeline | null>(null)
   const [cases, setCases] = useState<CaseItem[]>([])
   const [filter, setFilter] = useState<Filter>('all')
+  const [selectedCaseId, setSelectedCaseId] = useState<number | null>(
+    null,
+  )
+  const [caseDetail, setCaseDetail] = useState<CaseDetail | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailError, setDetailError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  function openCaseDetail(caseId: number) {
+    setCaseDetail(null)
+    setDetailError(null)
+    setSelectedCaseId(caseId)
+  }
+
+  function closeCaseDetail() {
+    setSelectedCaseId(null)
+    setCaseDetail(null)
+    setDetailError(null)
+  }
 
   useEffect(() => {
     async function loadDashboard() {
@@ -148,6 +209,53 @@ function App() {
 
     loadDashboard()
   }, [])
+
+  useEffect(() => {
+    if (selectedCaseId === null) {
+      return
+    }
+
+    async function loadCaseDetail() {
+      try {
+        setDetailLoading(true)
+        setDetailError(null)
+
+        const response = await fetch(
+          `${API_BASE}/api/issues/${ISSUE_SLUG}/cases/${selectedCaseId}`,
+        )
+
+        if (!response.ok) {
+          throw new Error('Não foi possível carregar o acórdão.')
+        }
+
+        const data: CaseDetail = await response.json()
+        setCaseDetail(data)
+      } catch (err) {
+        setCaseDetail(null)
+        setDetailError(
+          err instanceof Error ? err.message : 'Erro inesperado.',
+        )
+      } finally {
+        setDetailLoading(false)
+      }
+    }
+
+    loadCaseDetail()
+  }, [selectedCaseId])
+
+  useEffect(() => {
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setSelectedCaseId(null)
+      }
+    }
+
+    if (selectedCaseId !== null) {
+      window.addEventListener('keydown', closeOnEscape)
+    }
+
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [selectedCaseId])
 
   const chartData = useMemo(() => {
     if (!timeline) {
@@ -437,7 +545,11 @@ function App() {
 
           <div className="case-list">
             {visibleCases.map((item) => (
-              <CaseCard key={item.id} item={item} />
+              <CaseCard
+                key={item.id}
+                item={item}
+                onOpen={() => openCaseDetail(item.id)}
+              />
             ))}
           </div>
         </section>
@@ -463,6 +575,15 @@ function App() {
       </main>
 
       <footer>JurisShift · Protótipo de análise jurisprudencial</footer>
+
+      {selectedCaseId !== null && (
+        <CaseDetailModal
+          detail={caseDetail}
+          error={detailError}
+          loading={detailLoading}
+          onClose={closeCaseDetail}
+        />
+      )}
     </div>
   )
 }
@@ -538,25 +659,39 @@ function FilterButton({
   )
 }
 
-function CaseCard({ item }: { item: CaseItem }) {
+function CaseCard({
+  item,
+  onOpen,
+}: {
+  item: CaseItem
+  onOpen: () => void
+}) {
+  const isReview = item.stance.status === 'REVIEW'
   const isTwenty = item.stance.position_id === TWENTY_YEAR
 
-  const positionText = isTwenty
-    ? '20 anos'
-    : item.stance.position_id === FIVE_YEAR
-      ? '5 anos'
-      : 'Sem posição'
+  const positionText = isReview
+    ? 'Em revisão'
+    : isTwenty
+      ? '20 anos'
+      : item.stance.position_id === FIVE_YEAR
+        ? '5 anos'
+        : 'Sem posição'
 
-  const date = item.decision_date
-    ? new Intl.DateTimeFormat('pt-PT', {
-        day: '2-digit',
-        month: 'short',
-        year: 'numeric',
-      }).format(new Date(`${item.decision_date}T00:00:00`))
-    : 'Data não disponível'
+  const date = formatDate(item.decision_date)
 
   return (
-    <article className="case-card">
+    <article
+      className={`case-card ${isReview ? 'case-card-review' : ''}`}
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onOpen()
+        }
+      }}
+      role="button"
+      tabIndex={0}
+    >
       <div className="case-header">
         <div>
           <div className="case-meta">
@@ -569,24 +704,25 @@ function CaseCard({ item }: { item: CaseItem }) {
         </div>
 
         <div className="case-badges">
-          {item.stance.status === 'REVIEW' && (
-            <span className="review-badge">Rever</span>
-          )}
+          {isReview && <span className="review-badge">Rever</span>}
 
           <span
-            className={`position-badge ${isTwenty ? 'twenty' : 'five'}`}
+            className={`position-badge ${
+              isReview ? 'review' : isTwenty ? 'twenty' : 'five'
+            }`}
           >
             {positionText}
           </span>
         </div>
       </div>
 
-      {item.evidence ? (
+      {item.evidence && !isReview ? (
         <blockquote>“{item.evidence.quote}”</blockquote>
       ) : (
         <p className="no-evidence">
-          Classificação assinalada para revisão: não existe evidência
-          textual validada associada.
+          {isReview
+            ? 'Classificação assinalada para revisão: não é apresentada como conclusão validada.'
+            : 'Não existe evidência textual validada associada.'}
         </p>
       )}
 
@@ -595,12 +731,161 @@ function CaseCard({ item }: { item: CaseItem }) {
           {item.rapporteur && <span>Relator: {item.rapporteur}</span>}
         </div>
 
-        <a href={item.source_url} target="_blank" rel="noreferrer">
-          Ver fonte
+        <span className="case-open">
+          Ver detalhe
           <ArrowUpRight size={15} />
-        </a>
+        </span>
       </div>
     </article>
+  )
+}
+
+function CaseDetailModal({
+  detail,
+  error,
+  loading,
+  onClose,
+}: {
+  detail: CaseDetail | null
+  error: string | null
+  loading: boolean
+  onClose: () => void
+}) {
+  const isReview = detail?.status === 'REVIEW'
+  const context = detail?.evidence?.context
+
+  return (
+    <div className="detail-overlay" onClick={onClose}>
+      <section
+        className="detail-modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Detalhe do acórdão"
+      >
+        <button
+          className="detail-close"
+          onClick={onClose}
+          aria-label="Fechar detalhe"
+        >
+          <X size={18} />
+        </button>
+
+        {loading && (
+          <div className="detail-state">
+            <div className="spinner" />
+            <p>A carregar acórdão...</p>
+          </div>
+        )}
+
+        {!loading && error && (
+          <div className="detail-state">
+            <strong>Não foi possível carregar o detalhe.</strong>
+            <p>{error}</p>
+          </div>
+        )}
+
+        {!loading && !error && detail && (
+          <>
+            <div className="detail-header">
+              <div>
+                <div className="case-meta">
+                  <span>
+                    {detail.court ?? 'Tribunal não identificado'}
+                  </span>
+                  <span>·</span>
+                  <span>{formatDate(detail.decision_date)}</span>
+                </div>
+
+                <h2>Processo {detail.process_number}</h2>
+              </div>
+
+              <div className="case-badges">
+                {isReview && <span className="review-badge">Rever</span>}
+                <span
+                  className={`position-badge ${
+                    isReview
+                      ? 'review'
+                      : detail.position?.id === TWENTY_YEAR
+                        ? 'twenty'
+                        : 'five'
+                  }`}
+                >
+                  {isReview
+                    ? 'Em revisão'
+                    : detail.position?.label ?? 'Sem posição'}
+                </span>
+              </div>
+            </div>
+
+            <dl className="detail-meta-grid">
+              <div>
+                <dt>Tribunal</dt>
+                <dd>{detail.court ?? 'Não identificado'}</dd>
+              </div>
+              <div>
+                <dt>Relator</dt>
+                <dd>{detail.rapporteur ?? 'Não identificado'}</dd>
+              </div>
+              <div>
+                <dt>Questão</dt>
+                <dd>{detail.issue?.title ?? 'Não associada'}</dd>
+              </div>
+              <div>
+                <dt>Status</dt>
+                <dd>{detail.status ?? 'Não definido'}</dd>
+              </div>
+            </dl>
+
+            {isReview && (
+              <div className="review-notice">
+                Este acórdão está assinalado para revisão. A posição não
+                deve ser lida como conclusão validada.
+              </div>
+            )}
+
+            <div className="detail-section">
+              <div className="detail-section-heading">
+                <h3>Evidência</h3>
+                {detail.evidence?.verified && (
+                  <span className="verified-pill">
+                    Evidência verificada
+                  </span>
+                )}
+              </div>
+
+              {context && detail.evidence ? (
+                <div className="evidence-context">
+                  {context.before && <p>{context.before}</p>}
+                  <mark>{context.quote || detail.evidence.quote}</mark>
+                  {context.after && <p>{context.after}</p>}
+                  <span className="context-source">
+                    Contexto extraído de {context.source}
+                  </span>
+                </div>
+              ) : (
+                <p className="no-evidence detail-no-evidence">
+                  {isReview
+                    ? 'A evidência deste caso fica reservada para revisão antes de ser apresentada como validação.'
+                    : 'Não existe evidência verificada para apresentar.'}
+                </p>
+              )}
+            </div>
+
+            <div className="detail-actions">
+              <a
+                href={detail.source_url}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Abrir fonte oficial
+                <ArrowUpRight size={16} />
+              </a>
+            </div>
+          </>
+        )}
+      </section>
+    </div>
   )
 }
 
@@ -632,6 +917,16 @@ function ChartTooltip({
       ))}
     </div>
   )
+}
+
+function formatDate(value: string | null) {
+  return value
+    ? new Intl.DateTimeFormat('pt-PT', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+      }).format(new Date(`${value}T00:00:00`))
+    : 'Data não disponível'
 }
 
 export default App

@@ -38,6 +38,130 @@ app.add_middleware(
 )
 
 
+def _is_sentence_end(character: str) -> bool:
+    return character in ".!?:;"
+
+
+def _snap_context_start(
+    text: str,
+    preferred_start: int,
+    evidence_start: int,
+    tolerance: int = 220,
+) -> int:
+    if preferred_start <= 0:
+        return 0
+
+    earliest = max(0, preferred_start - tolerance)
+    latest = min(evidence_start, preferred_start + tolerance)
+    candidates: list[int] = []
+
+    for separator in ("\n\n", "\r\n\r\n", "\n"):
+        index = text.rfind(separator, earliest, latest)
+        if index != -1:
+            candidates.append(index + len(separator))
+
+    for index in range(latest - 1, earliest - 1, -1):
+        if _is_sentence_end(text[index]):
+            candidates.append(index + 1)
+            break
+
+    if not candidates:
+        return preferred_start
+
+    return min(
+        candidates,
+        key=lambda candidate: abs(candidate - preferred_start),
+    )
+
+
+def _snap_context_end(
+    text: str,
+    evidence_end: int,
+    preferred_end: int,
+    tolerance: int = 220,
+) -> int:
+    if preferred_end >= len(text):
+        return len(text)
+
+    earliest = max(evidence_end, preferred_end - tolerance)
+    latest = min(len(text), preferred_end + tolerance)
+    candidates: list[int] = []
+
+    for separator in ("\n\n", "\r\n\r\n", "\n"):
+        index = text.find(separator, earliest, latest)
+        if index != -1:
+            candidates.append(index)
+
+    for index in range(earliest, latest):
+        if _is_sentence_end(text[index]):
+            candidates.append(index + 1)
+            break
+
+    if not candidates:
+        return preferred_end
+
+    return min(
+        candidates,
+        key=lambda candidate: abs(candidate - preferred_end),
+    )
+
+
+def _get_evidence_context(
+    *,
+    summary: str | None,
+    full_text: str | None,
+    role: str | None,
+    start_offset: int | None,
+    end_offset: int | None,
+    quote: str | None,
+    radius: int = 500,
+) -> dict | None:
+    if not quote:
+        return None
+
+    source_name = (
+        "summary"
+        if role and "summary" in role.casefold()
+        else "full_text"
+    )
+
+    source_text = summary if source_name == "summary" else full_text
+    source_text = source_text or ""
+
+    if (
+        start_offset is None
+        or end_offset is None
+        or start_offset < 0
+        or end_offset < start_offset
+        or start_offset > len(source_text)
+    ):
+        return {
+            "source": source_name,
+            "before": "",
+            "quote": quote,
+            "after": "",
+        }
+
+    safe_end = min(end_offset, len(source_text))
+    before_start = _snap_context_start(
+        source_text,
+        max(0, start_offset - radius),
+        start_offset,
+    )
+    after_end = _snap_context_end(
+        source_text,
+        safe_end,
+        min(len(source_text), safe_end + radius),
+    )
+
+    return {
+        "source": source_name,
+        "before": source_text[before_start:start_offset].strip(),
+        "quote": source_text[start_offset:safe_end].strip() or quote,
+        "after": source_text[safe_end:after_end].strip(),
+    }
+
+
 @app.get("/api/health")
 def health():
     return {
@@ -539,4 +663,140 @@ def get_cases(
             }
             for row in rows
         ],
+    }
+
+
+@app.get("/api/issues/{issue_slug}/cases/{case_id}")
+def get_case_detail(issue_slug: str, case_id: int):
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT
+                c.id,
+                c.ecli,
+                c.process_number,
+                c.court,
+                c.section,
+                c.area,
+                c.decision_date,
+                c.rapporteur,
+                c.procedural_type,
+                c.decision,
+                c.voting,
+                c.summary,
+                c.full_text,
+                c.source_url,
+
+                i.slug AS issue_slug,
+                i.title AS issue_title,
+                i.question AS issue_question,
+                i.source AS issue_source,
+
+                s.decides_issue,
+                s.status,
+                s.extraction_model,
+                s.prompt_version,
+
+                p.id AS position_id,
+                p.label AS position_label,
+                p.description AS position_description,
+
+                e.id AS evidence_id,
+                e.quote AS evidence_quote,
+                e.role AS evidence_role,
+                e.start_offset AS evidence_start_offset,
+                e.end_offset AS evidence_end_offset,
+                e.verified AS evidence_verified
+
+            FROM cases c
+
+            JOIN stances s
+                ON s.case_id = c.id
+
+            JOIN issues i
+                ON i.slug = s.issue_slug
+
+            LEFT JOIN positions p
+                ON p.id = s.position_id
+                AND p.issue_slug = s.issue_slug
+
+            LEFT JOIN evidence e
+                ON e.stance_id = s.id
+                AND e.verified = 1
+
+            WHERE c.id = ?
+              AND s.issue_slug = ?
+
+            ORDER BY
+                e.id ASC
+            """,
+            (case_id, issue_slug),
+        ).fetchone()
+
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Acórdão não encontrado.",
+        )
+
+    evidence_context = _get_evidence_context(
+        summary=row["summary"],
+        full_text=row["full_text"],
+        role=row["evidence_role"],
+        start_offset=row["evidence_start_offset"],
+        end_offset=row["evidence_end_offset"],
+        quote=row["evidence_quote"],
+    )
+
+    return {
+        "id": row["id"],
+        "ecli": row["ecli"],
+        "process_number": row["process_number"],
+        "court": row["court"],
+        "section": row["section"],
+        "area": row["area"],
+        "decision_date": row["decision_date"],
+        "rapporteur": row["rapporteur"],
+        "procedural_type": row["procedural_type"],
+        "decision": row["decision"],
+        "voting": row["voting"],
+        "source_url": row["source_url"],
+        "issue": (
+            {
+                "slug": row["issue_slug"],
+                "title": row["issue_title"],
+                "question": row["issue_question"],
+                "source": row["issue_source"],
+            }
+            if row["issue_slug"]
+            else None
+        ),
+        "position": (
+            {
+                "id": row["position_id"],
+                "label": row["position_label"],
+                "description": row["position_description"],
+            }
+            if row["position_id"]
+            else None
+        ),
+        "decides_issue": (
+            bool(row["decides_issue"])
+            if row["decides_issue"] is not None
+            else False
+        ),
+        "status": row["status"],
+        "model": row["extraction_model"],
+        "prompt_version": row["prompt_version"],
+        "evidence": (
+            {
+                "id": row["evidence_id"],
+                "quote": row["evidence_quote"],
+                "role": row["evidence_role"],
+                "verified": bool(row["evidence_verified"]),
+                "context": evidence_context,
+            }
+            if row["evidence_id"]
+            else None
+        ),
     }
