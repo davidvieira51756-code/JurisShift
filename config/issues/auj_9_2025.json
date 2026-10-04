@@ -1,0 +1,18 @@
+{
+  "slug": "family-home-own-land",
+  "title": "Casa construída em terreno próprio de um dos cônjuges",
+  "question": "Quando dois cônjuges, casados no regime da comunhão de adquiridos, constroem com dinheiro ou bens comuns a casa de morada de família num terreno próprio de um deles, aplica-se o artigo 1726.º do Código Civil à qualificação do imóvel ou este permanece bem próprio do titular do terreno, com compensação ao património comum?",
+  "source": "Acórdão do Supremo Tribunal de Justiça n.º 9/2025",
+  "positions": [
+    {
+      "id": "family-home-article-1726",
+      "label": "Aplica-se o artigo 1726.º",
+      "description": "O terreno próprio e a construção realizada com meios comuns são considerados conjuntamente para efeitos do artigo 1726.º do Código Civil. O imóvel será bem comum ou bem próprio do cônjuge titular do terreno consoante seja mais valiosa a contribuição comum para a construção ou o valor do terreno próprio, sem prejuízo da compensação patrimonial devida."
+    },
+    {
+      "id": "family-home-own-property",
+      "label": "Permanece bem próprio do titular do terreno",
+      "description": "Não se aplica o artigo 1726.º do Código Civil à construção realizada em terreno próprio de um dos cônjuges. A obra incorporada constitui uma coisa nova que permanece bem próprio do cônjuge titular do terreno, assistindo ao património comum um crédito de compensação destinado a repor o equilíbrio patrimonial."
+    }
+  ]
+}

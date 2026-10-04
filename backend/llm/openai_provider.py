@@ -47,33 +47,49 @@ class OpenAIProvider:
         model: str = "gpt-6.1-sol",
     ):
         self.model = model
-
         self.client = OpenAI()
 
     def generate_json(
         self,
         prompt: str,
+        schema: dict | None = None,
+        schema_name: str | None = None,
     ) -> tuple[dict, dict]:
-
-        response = self.client.responses.create(
-            model=self.model,
-            reasoning={
-                "effort": "low",
-            },
-            input=prompt,
-            text={
-                "verbosity": "low",
-                "format": {
-                    "type": "json_schema",
-                    "name": "stance_classification",
-                    "strict": True,
-                    "schema": STANCE_SCHEMA,
-                },
-            },
-            max_output_tokens=1500,
+        effective_schema = (
+            schema
+            if schema is not None
+            else STANCE_SCHEMA
         )
 
-        if response.status != "completed":
+        effective_name = (
+            schema_name
+            or "stance_classification"
+        )
+
+        response = (
+            self.client.responses.create(
+                model=self.model,
+                reasoning={
+                    "effort": "low",
+                },
+                input=prompt,
+                text={
+                    "verbosity": "low",
+                    "format": {
+                        "type": "json_schema",
+                        "name": effective_name,
+                        "strict": True,
+                        "schema": effective_schema,
+                    },
+                },
+                max_output_tokens=1500,
+            )
+        )
+
+        if (
+            response.status
+            != "completed"
+        ):
             raise RuntimeError(
                 f"OpenAI response status: "
                 f"{response.status}"

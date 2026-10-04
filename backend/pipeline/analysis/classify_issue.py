@@ -16,36 +16,133 @@ from backend.llm.factory import (
 )
 
 
-load_dotenv()
+# O override evita que uma OPENAI_API_KEY antiga
+# definida no Windows se sobreponha ao .env.
+load_dotenv(override=True)
+
 
 MODEL = os.getenv(
     "LLM_MODEL",
-    "qwen3.5:2b",
+    "gpt-5.6-luna",
 )
 
-PROMPT_VERSION = "stance-v5"
+PROMPT_VERSION = "stance-v7-generic"
 
-KEYWORDS = [
-    "310.º",
-    "310º",
-    "artigo 310",
-    "art. 310",
-    "781.º",
-    "781º",
-    "artigo 781",
-    "art. 781",
-    "prescrição",
-    "vencimento antecipado",
-    "cinco anos",
-    "5 anos",
-    "vinte anos",
-    "20 anos",
-    "prazo ordinário",
-    "acórdão uniformizador",
+
+ISSUE_RULES = {
+    "loan-prescription-acceleration": {
+        "keywords": [
+            "310.º",
+            "310º",
+            "artigo 310",
+            "art. 310",
+            "781.º",
+            "781º",
+            "artigo 781",
+            "art. 781",
+            "prescrição",
+            "vencimento antecipado",
+            "cinco anos",
+            "5 anos",
+            "vinte anos",
+            "20 anos",
+            "prazo ordinário",
+            "acórdão uniformizador",
+            "uniformização",
+            "AUJ",
+            "6/2022",
+        ],
+        "guidance": """
+REGRAS ESPECÍFICAS DA QUESTÃO:
+- Uma mera referência a prescrição, vencimento antecipado
+  ou artigo 781.º não significa que o tribunal tenha decidido
+  esta questão.
+- Para a posição loan-prescription-five-year, a evidência deve
+  mostrar que o prazo de cinco anos continua aplicável apesar
+  do vencimento antecipado, ou conclusão juridicamente
+  equivalente.
+- Para a posição loan-prescription-twenty-year, a evidência
+  deve mostrar que passa a aplicar-se o prazo ordinário,
+  designadamente vinte anos.
+""".strip(),
+    },
+
+    "family-home-own-land": {
+        "keywords": [
+            "1726.º",
+            "1726º",
+            "artigo 1726",
+            "art. 1726",
+            "comunhão de adquiridos",
+            "terreno próprio",
+            "prédio próprio",
+            "bem próprio",
+            "bens próprios",
+            "bem comum",
+            "bens comuns",
+            "património comum",
+            "construção",
+            "casa",
+            "moradia",
+            "edificação",
+            "benfeitoria",
+            "benfeitorias",
+            "compensação",
+            "crédito",
+            "coisa nova",
+            "AUJ",
+            "9/2025",
+        ],
+        "guidance": """
+REGRAS ESPECÍFICAS DA QUESTÃO:
+- A questão é a qualificação jurídica do imóvel construído
+  com meios comuns em terreno que é bem próprio de um
+  dos cônjuges.
+- Não basta que o acórdão mencione partilha, benfeitorias,
+  comunhão de adquiridos ou o artigo 1726.º.
+- Para family-home-article-1726, o tribunal deve efetivamente
+  aplicar o regime do artigo 1726.º à relação entre o terreno
+  próprio e a construção realizada com meios comuns, ou chegar
+  a conclusão juridicamente equivalente.
+- Para family-home-own-property, o tribunal deve afastar essa
+  solução e considerar que o imóvel permanece bem próprio do
+  titular do terreno, reconhecendo ou admitindo a correspondente
+  compensação/crédito do património comum, ou conclusão
+  juridicamente equivalente.
+- Um acórdão pode descrever a orientação oposta apenas para a
+  citar ou rejeitar. Nesse caso, classifica segundo a posição
+  que o próprio tribunal efetivamente adota.
+""".strip(),
+    },
+}
+
+
+DEFAULT_KEYWORDS = [
+    "acórdão",
+    "tribunal",
     "uniformização",
-    "auj",
-    "6/2022",
 ]
+
+
+PARTY_ARGUMENT_MARKERS = (
+    "a recorrente",
+    "o recorrente",
+    "a recorrida",
+    "o recorrido",
+    "a apelante",
+    "o apelante",
+    "a exequente",
+    "o exequente",
+    "a executada",
+    "o executado",
+    "alega que",
+    "alegou que",
+    "sustenta que",
+    "defende que",
+    "conclui que",
+    "nas suas conclusões",
+    "conclusões do recurso",
+)
 
 
 def get_issue(
@@ -76,6 +173,11 @@ def get_issue(
             f"Questão não encontrada: {issue_slug}"
         )
 
+    if not positions:
+        raise RuntimeError(
+            f"A questão {issue_slug} não tem posições configuradas."
+        )
+
     return (
         dict(issue),
         [
@@ -86,31 +188,45 @@ def get_issue(
 
 
 def get_cases(
+    issue_slug: str,
     limit: int | None,
 ) -> list[dict]:
     sql = """
         SELECT
-            id,
-            ecli,
-            process_number,
-            decision_date,
-            summary,
-            full_text,
-            source_url
-        FROM cases
-        ORDER BY decision_date ASC
+            c.id,
+            c.ecli,
+            c.process_number,
+            c.decision_date,
+            c.summary,
+            c.full_text,
+            c.source_url
+
+        FROM cases c
+
+        JOIN corpus_membership cm
+            ON cm.case_id = c.id
+
+        WHERE cm.issue_slug = ?
+
+        ORDER BY
+            c.decision_date ASC,
+            c.process_number ASC
     """
 
-    params = ()
+    params: list = [
+        issue_slug
+    ]
 
     if limit is not None:
         sql += " LIMIT ?"
-        params = (limit,)
+        params.append(
+            limit
+        )
 
     with get_connection() as connection:
         rows = connection.execute(
             sql,
-            params,
+            tuple(params),
         ).fetchall()
 
     return [
@@ -119,9 +235,29 @@ def get_cases(
     ]
 
 
+def get_issue_rules(
+    issue_slug: str,
+) -> dict:
+    return ISSUE_RULES.get(
+        issue_slug,
+        {
+            "keywords": DEFAULT_KEYWORDS,
+            "guidance": (
+                "Não existem regras específicas adicionais. "
+                "Classifica exclusivamente com base na pergunta "
+                "e nas posições permitidas."
+            ),
+        },
+    )
+
+
 def merge_windows(
-    windows: list[tuple[int, int]],
-) -> list[tuple[int, int]]:
+    windows: list[
+        tuple[int, int]
+    ],
+) -> list[
+    tuple[int, int]
+]:
     if not windows:
         return []
 
@@ -155,18 +291,36 @@ def merge_windows(
 
 def build_excerpts(
     text: str,
-    max_chars: int = 6500,
+    issue_slug: str,
+    max_chars: int = 7500,
 ) -> str:
     if not text:
         return ""
 
-    lowered = text.casefold()
-    windows = []
+    rules = get_issue_rules(
+        issue_slug
+    )
 
-    for keyword in KEYWORDS:
+    keywords = rules[
+        "keywords"
+    ]
+
+    lowered = (
+        text.casefold()
+    )
+
+    windows: list[
+        tuple[int, int]
+    ] = []
+
+    for keyword in keywords:
+        keyword_normalized = (
+            keyword.casefold()
+        )
+
         for match in re.finditer(
             re.escape(
-                keyword.casefold()
+                keyword_normalized
             ),
             lowered,
         ):
@@ -174,11 +328,11 @@ def build_excerpts(
                 (
                     max(
                         0,
-                        match.start() - 700,
+                        match.start() - 800,
                     ),
                     min(
                         len(text),
-                        match.end() + 1200,
+                        match.end() + 1400,
                     ),
                 )
             )
@@ -187,7 +341,7 @@ def build_excerpts(
         windows
     )
 
-    pieces = []
+    pieces: list[str] = []
     total = 0
 
     for start, end in windows:
@@ -248,16 +402,27 @@ def build_prompt(
         or "Não disponível."
     )
 
-    # Evita gastar contexto desnecessariamente.
-    summary = summary[:2500]
+    summary = summary[
+        :7000
+    ]
 
     excerpts = build_excerpts(
         case["full_text"]
-        or ""
+        or "",
+        issue["slug"],
     )
 
+    rules = get_issue_rules(
+        issue["slug"]
+    )
+
+    guidance = rules[
+        "guidance"
+    ]
+
     return f"""
-Classifica este acórdão português.
+Classifica este acórdão português relativamente
+a UMA questão jurídica específica.
 
 QUESTÃO:
 {issue["question"]}
@@ -265,51 +430,34 @@ QUESTÃO:
 POSIÇÕES PERMITIDAS:
 {positions_text}
 
-REGRAS:
+REGRAS GERAIS:
 - Usa apenas o texto fornecido.
-- decides_issue=true apenas se o tribunal
-  realmente decidir ESTA questão.
-- Uma mera referência a prescrição,
-  vencimento antecipado ou artigo 781.º
-  não basta.
-- Se decides_issue=false,
-  position_id deve ser null.
-- Se decides_issue=true,
-  position_id deve ser exatamente um dos IDs
-  fornecidos.
+- decides_issue=true apenas se o tribunal realmente decidir
+  a questão jurídica acima.
+- A mera presença de palavras relacionadas com o tema
+  não significa que o acórdão decida a questão.
+- Se decides_issue=false, position_id deve ser null.
+- Se decides_issue=true, position_id deve ser exatamente
+  um dos IDs fornecidos.
 - evidence_quote deve ser uma citação literal retirada
   do SUMÁRIO ou dos EXCERTOS fornecidos.
+- Nunca reformules a evidence_quote.
 - Prefere o SUMÁRIO quando este declarar claramente
-  a posição jurídica adotada pelo tribunal.
-- A evidence_quote tem de, por si só, sustentar
-  a position_id escolhida.
-- Para a posição dos cinco anos, a citação deve
-  demonstrar que o prazo quinquenal continua
-  aplicável apesar do vencimento antecipado,
-  ou uma conclusão juridicamente equivalente.
-- Para a posição do prazo ordinário, a citação
-  deve demonstrar que após o vencimento antecipado
-  passa a aplicar-se o prazo ordinário,
-  nomeadamente vinte anos.
-- Não uses como evidence_quote uma frase que apenas
-  diga que ocorreu vencimento antecipado.
-- Não reformules a evidence_quote.
-- Se o texto fornecido não contiver uma citação
-  capaz de demonstrar a posição, baixa a confiança
-  e não inventes evidência.
+  a posição efetivamente adotada pelo tribunal.
+- A evidence_quote tem de, por si só e no respetivo
+  contexto, sustentar a posição escolhida.
+- Não uses como prova alegações, conclusões,
+  argumentos ou pedidos das partes.
+- Não confundas uma posição citada, descrita ou rejeitada
+  com a posição efetivamente adotada pelo tribunal.
+- Se o acórdão descrever duas correntes jurisprudenciais,
+  identifica qual delas o tribunal acolhe no caso.
+- Se não for possível determinar a posição com segurança,
+  baixa a confiança e não inventes evidência.
 - confidence é um número entre 0 e 1.
 - reason deve ter no máximo 2 frases.
-- A classificação deve refletir exclusivamente a posição
-  adotada pelo tribunal no acórdão.
-- Não uses alegações, conclusões, argumentos ou pedidos
-  das partes como prova da posição do tribunal.
-- Não uses como evidence_quote texto que apenas descreva
-  aquilo que o recorrente, recorrido, exequente, executado
-  ou outra parte defendeu.
-- Prefere passagens da fundamentação jurídica do tribunal,
-  do sumário ou da conclusão decisória.
-- Se houver posições opostas das partes no texto,
-  identifica qual delas foi efetivamente acolhida pelo tribunal.
+
+{guidance}
 
 Devolve apenas JSON com esta estrutura:
 
@@ -416,49 +564,34 @@ def store_llm_call(
         connection.commit()
 
 
-PARTY_ARGUMENT_MARKERS = (
-    "alega que",
-    "alegou que",
-    "sustenta que",
-    "sustentou que",
-    "defende que",
-    "defendeu que",
-    "conclui que",
-    "concluiu que",
-    "nas suas conclusões",
-    "conclusões do recurso",
-    "pugna por",
-    "pugnou por",
-    "pretende que",
-    "invoca que",
-    "invocou que",
-    "segundo a recorrente",
-    "segundo o recorrente",
-)
-
-
 def looks_like_party_argument(
     quote: str,
 ) -> bool:
-    normalized = quote.casefold()
+    normalized = (
+        quote.casefold()
+    )
 
     return any(
         marker in normalized
-        for marker in PARTY_ARGUMENT_MARKERS
+        for marker
+        in PARTY_ARGUMENT_MARKERS
     )
 
 
-def evidence_supports_position(
-    quote: str,
+def contains_any(
+    text: str,
+    terms: tuple[str, ...],
+) -> bool:
+    return any(
+        term in text
+        for term in terms
+    )
+
+
+def evidence_supports_loan_position(
+    normalized: str,
     position_id: str,
 ) -> bool:
-    if looks_like_party_argument(
-        quote
-    ):
-        return False
-
-    normalized = quote.casefold()
-
     five_year_terms = (
         "cinco anos",
         "5 anos",
@@ -476,7 +609,6 @@ def evidence_supports_position(
     article_310_terms = (
         "310.º",
         "310º",
-        "310.°",
         "artigo 310",
         "art. 310",
     )
@@ -488,83 +620,43 @@ def evidence_supports_position(
         "al. e",
     )
 
-    prescription_terms = (
-        "prescrição",
-        "prescricional",
+    has_five_year = contains_any(
+        normalized,
+        five_year_terms,
     )
 
-    acceleration_terms = (
-        "vencimento antecipado",
-        "vencimento imediato",
-        "vencer na sua totalidade",
-        "vencer na totalidade",
-        "perda do benefício do prazo",
-        "perda de benefício do prazo",
+    has_twenty_year = contains_any(
+        normalized,
+        twenty_year_terms,
     )
 
-    has_five_year = any(
-        term in normalized
-        for term in five_year_terms
+    has_article_310 = contains_any(
+        normalized,
+        article_310_terms,
     )
 
-    has_twenty_year = any(
-        term in normalized
-        for term in twenty_year_terms
-    )
-
-    has_article_310 = any(
-        term in normalized
-        for term in article_310_terms
-    )
-
-    has_letter_e = any(
-        term in normalized
-        for term in letter_e_terms
-    )
-
-    has_prescription = any(
-        term in normalized
-        for term in prescription_terms
-    )
-
-    has_acceleration = any(
-        term in normalized
-        for term in acceleration_terms
+    has_letter_e = contains_any(
+        normalized,
+        letter_e_terms,
     )
 
     if (
         position_id
         == "loan-prescription-five-year"
     ):
-        # Uma afirmação explícita de que se aplicam
-        # 20 anos contradiz esta posição.
         if (
             has_twenty_year
             and not has_five_year
         ):
             return False
 
-        # Evidência explícita do prazo quinquenal.
-        if has_five_year:
-            return True
-
-        # Referência ao artigo 310.º, alínea e).
-        if (
-            has_article_310
-            and has_letter_e
-        ):
-            return True
-
-        # Formulação juridicamente equivalente:
-        # o vencimento antecipado/total não altera
-        # o enquadramento prescricional.
-        if (
-            has_prescription
-            and has_acceleration
-        ):
-            return True
-
-        return False
+        return (
+            has_five_year
+            or (
+                has_article_310
+                and has_letter_e
+            )
+        )
 
     if (
         position_id
@@ -574,79 +666,332 @@ def evidence_supports_position(
 
     return False
 
+
+def evidence_supports_family_home_position(
+    normalized: str,
+    position_id: str,
+) -> bool:
+    article_1726_terms = (
+        "1726.º",
+        "1726º",
+        "artigo 1726",
+        "art. 1726",
+    )
+
+    property_context_terms = (
+        "terreno",
+        "prédio",
+        "imóvel",
+        "casa",
+        "moradia",
+        "construção",
+        "edificação",
+    )
+
+    own_context_terms = (
+        "terreno próprio",
+        "bem próprio",
+        "bens próprios",
+        "imóvel pertencente a um só",
+        "propriedade exclusiva de apenas um",
+        "propriedade de um deles",
+        "próprio do cônjuge",
+        "próprio da ré",
+        "próprio do réu",
+    )
+
+    common_result_terms = (
+        "é bem comum",
+        "bem comum de ambos",
+        "constitui bem comum",
+        "deve ser considerado bem comum",
+        "deve ser tratada como bem comum",
+        "integra o património comum",
+    )
+
+    compensation_terms = (
+        "compensação",
+        "crédito",
+        "recompensa",
+        "direito de crédito",
+    )
+
+    improvement_terms = (
+        "benfeitoria",
+        "benfeitorias",
+    )
+
+    apply_terms = (
+        "aplica-se",
+        "é aplicável",
+        "aplicável",
+        "aplicação do artigo 1726",
+        "regime do artigo 1726",
+        "nos termos do artigo 1726",
+    )
+
+    reject_terms = (
+        "não se aplica",
+        "não é aplicável",
+        "não tem aplicação",
+        "inaplicável",
+        "afastada a aplicação",
+        "afastar a aplicação",
+    )
+
+    value_terms = (
+        "mais valiosa",
+        "parte mais valiosa",
+        "maior valor",
+        "valor superior",
+        "maior contribuição",
+        "contribuição de maior valor",
+        "mais valiosa das duas prestações",
+    )
+
+    new_thing_terms = (
+        "coisa nova",
+        "nova coisa",
+    )
+
+    has_article = contains_any(
+        normalized,
+        article_1726_terms,
+    )
+
+    has_property_context = contains_any(
+        normalized,
+        property_context_terms,
+    )
+
+    has_own_context = contains_any(
+        normalized,
+        own_context_terms,
+    )
+
+    has_common_result = contains_any(
+        normalized,
+        common_result_terms,
+    )
+
+    has_compensation = contains_any(
+        normalized,
+        compensation_terms,
+    )
+
+    has_improvement = contains_any(
+        normalized,
+        improvement_terms,
+    )
+
+    has_apply = contains_any(
+        normalized,
+        apply_terms,
+    )
+
+    has_reject = contains_any(
+        normalized,
+        reject_terms,
+    )
+
+    has_value_rule = contains_any(
+        normalized,
+        value_terms,
+    )
+
+    has_new_thing = contains_any(
+        normalized,
+        new_thing_terms,
+    )
+
+    if (
+        position_id
+        == "family-home-article-1726"
+    ):
+        if has_reject:
+            return False
+
+        return (
+            (
+                has_article
+                and has_apply
+            )
+            or (
+                has_property_context
+                and has_value_rule
+                and has_common_result
+            )
+        )
+
+    if (
+        position_id
+        == "family-home-own-property"
+    ):
+        return (
+            (
+                has_own_context
+                and has_improvement
+            )
+            or (
+                has_own_context
+                and has_compensation
+            )
+            or (
+                has_property_context
+                and has_new_thing
+                and has_compensation
+            )
+            or (
+                has_article
+                and has_reject
+            )
+        )
+
+    return False
+
+
+def evidence_supports_position(
+    quote: str,
+    issue_slug: str,
+    position_id: str,
+) -> bool:
+    if looks_like_party_argument(
+        quote
+    ):
+        return False
+
+    normalized = (
+        quote.casefold()
+    )
+
+    if (
+        issue_slug
+        == "loan-prescription-acceleration"
+    ):
+        return (
+            evidence_supports_loan_position(
+                normalized,
+                position_id,
+            )
+        )
+
+    if (
+        issue_slug
+        == "family-home-own-land"
+    ):
+        return (
+            evidence_supports_family_home_position(
+                normalized,
+                position_id,
+            )
+        )
+
+    # Para futuras issues desconhecidas,
+    # não promovemos evidência automaticamente.
+    # Fica REVIEW até existir uma regra determinística.
+    return False
+
+
 def find_quote_with_normalized_whitespace(
     source: str,
     quote: str,
-) -> tuple[int | None, int | None]:
-    if not source or not quote:
-        return None, None
+) -> tuple[
+    int | None,
+    int | None,
+]:
+    if (
+        not source
+        or not quote
+    ):
+        return (
+            None,
+            None,
+        )
 
-    # Cria uma versão normalizada do texto, mas mantém
-    # um mapa para as posições no texto original.
-    normalized_chars = []
-    original_indexes = []
+    punctuation_map = {
+        "“": '"',
+        "”": '"',
+        "„": '"',
+        "«": '"',
+        "»": '"',
+        "‘": "'",
+        "’": "'",
+        "–": "-",
+        "—": "-",
+        "-": "-",
+    }
 
-    in_whitespace = False
+    def normalize_with_map(
+        text: str,
+    ) -> tuple[
+        str,
+        list[int],
+    ]:
+        chars: list[str] = []
+        indexes: list[int] = []
 
-    for index, char in enumerate(source):
-        if char.isspace():
-            if not in_whitespace:
-                normalized_chars.append(" ")
-                original_indexes.append(index)
+        in_whitespace = False
 
-            in_whitespace = True
-        else:
-            normalized_chars.append(char)
-            original_indexes.append(index)
+        for index, char in enumerate(
+            text
+        ):
+            if char.isspace():
+                if not in_whitespace:
+                    chars.append(" ")
+                    indexes.append(index)
+
+                in_whitespace = True
+                continue
+
             in_whitespace = False
 
-    normalized_source = "".join(
-        normalized_chars
-    ).strip()
+            normalized_char = (
+                punctuation_map.get(
+                    char,
+                    char,
+                )
+            )
 
-    normalized_quote = re.sub(
-        r"\s+",
-        " ",
-        quote,
-    ).strip()
+            chars.append(
+                normalized_char
+            )
 
-    position = normalized_source.find(
-        normalized_quote
+            indexes.append(
+                index
+            )
+
+        return (
+            "".join(chars),
+            indexes,
+        )
+
+    normalized_source, original_indexes = (
+        normalize_with_map(
+            source
+        )
+    )
+
+    normalized_quote, _ = (
+        normalize_with_map(
+            quote
+        )
+    )
+
+    normalized_quote = (
+        normalized_quote.strip()
+    )
+
+    position = (
+        normalized_source.find(
+            normalized_quote
+        )
     )
 
     if position < 0:
-        return None, None
-
-    # O .strip() acima pode deslocar o mapa se
-    # o source começar com whitespace, por isso
-    # calculamos novamente sem strip no source.
-    normalized_chars = []
-    original_indexes = []
-
-    in_whitespace = False
-
-    for index, char in enumerate(source):
-        if char.isspace():
-            if not in_whitespace:
-                normalized_chars.append(" ")
-                original_indexes.append(index)
-
-            in_whitespace = True
-        else:
-            normalized_chars.append(char)
-            original_indexes.append(index)
-            in_whitespace = False
-
-    normalized_source = "".join(
-        normalized_chars
-    )
-
-    position = normalized_source.find(
-        normalized_quote
-    )
-
-    if position < 0:
-        return None, None
+        return (
+            None,
+            None,
+        )
 
     normalized_end = (
         position
@@ -655,14 +1000,23 @@ def find_quote_with_normalized_whitespace(
     )
 
     if (
-        position >= len(original_indexes)
-        or normalized_end >= len(original_indexes)
+        position >= len(
+            original_indexes
+        )
+        or normalized_end >= len(
+            original_indexes
+        )
     ):
-        return None, None
+        return (
+            None,
+            None,
+        )
 
-    start_offset = original_indexes[
-        position
-    ]
+    start_offset = (
+        original_indexes[
+            position
+        ]
+    )
 
     end_offset = (
         original_indexes[
@@ -680,6 +1034,7 @@ def find_quote_with_normalized_whitespace(
 def find_evidence(
     case: dict,
     quote: str,
+    issue_slug: str,
     position_id: str,
 ) -> tuple[
     bool,
@@ -697,10 +1052,9 @@ def find_evidence(
         or ""
     )
 
-    # A citação tem primeiro de suportar
-    # deterministicamente a posição atribuída.
     if not evidence_supports_position(
         quote,
+        issue_slug,
         position_id,
     ):
         return (
@@ -710,7 +1064,6 @@ def find_evidence(
             None,
         )
 
-    # 1. Preferimos o sumário.
     start_offset, end_offset = (
         find_quote_with_normalized_whitespace(
             summary,
@@ -726,8 +1079,6 @@ def find_evidence(
             end_offset,
         )
 
-    # 2. Se não estiver no sumário,
-    # procuramos no texto integral.
     start_offset, end_offset = (
         find_quote_with_normalized_whitespace(
             full_text,
@@ -756,7 +1107,10 @@ def save_classification(
     issue: dict,
     positions: list[dict],
     result: dict,
-) -> tuple[str, bool]:
+) -> tuple[
+    str,
+    bool,
+]:
     allowed_positions = {
         position["id"]
         for position in positions
@@ -780,6 +1134,7 @@ def save_classification(
                 0,
             )
         )
+
     except (
         TypeError,
         ValueError,
@@ -831,6 +1186,7 @@ def save_classification(
         ) = find_evidence(
             case,
             quote,
+            issue["slug"],
             position_id,
         )
 
@@ -899,9 +1255,9 @@ def save_classification(
             ),
         ).fetchone()
 
-        stance_id = stance[
-            "id"
-        ]
+        stance_id = (
+            stance["id"]
+        )
 
         connection.execute(
             """
@@ -910,11 +1266,35 @@ def save_classification(
             """,
             (stance_id,),
         )
+        
+        stored_quote = quote
+
+    if (
+        quote_verified
+        and start_offset is not None
+        and end_offset is not None
+    ):
+        source_text = (
+            case["summary"]
+            if evidence_role == "summary"
+            else case["full_text"]
+        )
+
+        source_text = (
+            source_text
+            or ""
+        )
+
+        stored_quote = (
+            source_text[
+                start_offset:end_offset
+            ].strip()
+        )
 
         if (
-            quote_verified
-            and evidence_role
-            and quote
+        quote_verified
+        and evidence_role
+        and stored_quote
         ):
             connection.execute(
                 """
@@ -933,10 +1313,9 @@ def save_classification(
                     evidence_role,
                     start_offset,
                     end_offset,
-                    quote,
+                    stored_quote,
                 ),
             )
-
         connection.commit()
 
     return (
@@ -946,7 +1325,9 @@ def save_classification(
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = (
+        argparse.ArgumentParser()
+    )
 
     parser.add_argument(
         "issue_slug",
@@ -967,29 +1348,47 @@ def main():
     )
 
     cases = get_cases(
-        args.limit
+        args.issue_slug,
+        args.limit,
     )
 
-    provider = get_llm_provider()
-
-    print()
-    print("=" * 70)
-    print("JURISSHIFT — CLASSIFICATION")
-    print("=" * 70)
-
-    print(
-        f"Questão: {issue['title']}"
-    )
-
-    print(
-        f"Modelo:  {provider.model}"
-    )
-
-    print(
-        f"Casos:   {len(cases)}"
+    provider = (
+        get_llm_provider()
     )
 
     print()
+    print("=" * 70)
+    print(
+        "JURISSHIFT — CLASSIFICATION"
+    )
+    print("=" * 70)
+
+    print(
+        f"Questão: "
+        f"{issue['title']}"
+    )
+
+    print(
+        f"Modelo:  "
+        f"{provider.model}"
+    )
+
+    print(
+        f"Casos:   "
+        f"{len(cases)}"
+    )
+
+    print()
+
+    if not cases:
+        print(
+            "Nenhum caso pertence ao corpus desta issue."
+        )
+        print(
+            "Faz primeiro a ingestão e o registo em "
+            "corpus_membership."
+        )
+        return
 
     success = 0
     failed = 0
@@ -1086,12 +1485,15 @@ def main():
 
     print()
     print("=" * 70)
+
     print(
         f"Processados: {success}"
     )
+
     print(
         f"Falharam:    {failed}"
     )
+
     print("=" * 70)
 
 

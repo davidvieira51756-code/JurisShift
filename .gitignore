@@ -19,3 +19,5 @@ data/*.db
 # Frontend
 node_modules/
 dist/
+# Deployment corpus
+!data/jurisshift.db

@@ -1,13 +1,12 @@
+import re
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.db.database import (
-    get_connection,
-    init_db,
-)
-
+from backend.db.database import get_connection, init_db
+from backend.rag.chat import answer_issue_question
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -18,13 +17,15 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="JurisShift API",
     version="0.1.0",
-    description=(
-        "API de exploração da evolução "
-        "e divergência jurisprudencial."
-    ),
+    description="API de exploração da evolução e divergência jurisprudencial.",
     lifespan=lifespan,
 )
 
+class ChatRequest(BaseModel):
+    question: str = Field(
+        min_length=1,
+        max_length=1500,
+    )
 
 app.add_middleware(
     CORSMiddleware,
@@ -51,18 +52,45 @@ def _snap_context_start(
     if preferred_start <= 0:
         return 0
 
-    earliest = max(0, preferred_start - tolerance)
-    latest = min(evidence_start, preferred_start + tolerance)
+    earliest = max(
+        0,
+        preferred_start - tolerance,
+    )
+
+    latest = min(
+        evidence_start,
+        preferred_start + tolerance,
+    )
+
     candidates: list[int] = []
 
-    for separator in ("\n\n", "\r\n\r\n", "\n"):
-        index = text.rfind(separator, earliest, latest)
-        if index != -1:
-            candidates.append(index + len(separator))
+    for separator in (
+        "\n\n",
+        "\r\n\r\n",
+        "\n",
+    ):
+        index = text.rfind(
+            separator,
+            earliest,
+            latest,
+        )
 
-    for index in range(latest - 1, earliest - 1, -1):
-        if _is_sentence_end(text[index]):
-            candidates.append(index + 1)
+        if index != -1:
+            candidates.append(
+                index + len(separator)
+            )
+
+    for index in range(
+        latest - 1,
+        earliest - 1,
+        -1,
+    ):
+        if _is_sentence_end(
+            text[index]
+        ):
+            candidates.append(
+                index + 1
+            )
             break
 
     if not candidates:
@@ -70,7 +98,9 @@ def _snap_context_start(
 
     return min(
         candidates,
-        key=lambda candidate: abs(candidate - preferred_start),
+        key=lambda candidate: abs(
+            candidate - preferred_start
+        ),
     )
 
 
@@ -83,18 +113,44 @@ def _snap_context_end(
     if preferred_end >= len(text):
         return len(text)
 
-    earliest = max(evidence_end, preferred_end - tolerance)
-    latest = min(len(text), preferred_end + tolerance)
+    earliest = max(
+        evidence_end,
+        preferred_end - tolerance,
+    )
+
+    latest = min(
+        len(text),
+        preferred_end + tolerance,
+    )
+
     candidates: list[int] = []
 
-    for separator in ("\n\n", "\r\n\r\n", "\n"):
-        index = text.find(separator, earliest, latest)
-        if index != -1:
-            candidates.append(index)
+    for separator in (
+        "\n\n",
+        "\r\n\r\n",
+        "\n",
+    ):
+        index = text.find(
+            separator,
+            earliest,
+            latest,
+        )
 
-    for index in range(earliest, latest):
-        if _is_sentence_end(text[index]):
-            candidates.append(index + 1)
+        if index != -1:
+            candidates.append(
+                index
+            )
+
+    for index in range(
+        earliest,
+        latest,
+    ):
+        if _is_sentence_end(
+            text[index]
+        ):
+            candidates.append(
+                index + 1
+            )
             break
 
     if not candidates:
@@ -102,7 +158,9 @@ def _snap_context_end(
 
     return min(
         candidates,
-        key=lambda candidate: abs(candidate - preferred_end),
+        key=lambda candidate: abs(
+            candidate - preferred_end
+        ),
     )
 
 
@@ -121,12 +179,24 @@ def _get_evidence_context(
 
     source_name = (
         "summary"
-        if role and "summary" in role.casefold()
+        if (
+            role
+            and "summary"
+            in role.casefold()
+        )
         else "full_text"
     )
 
-    source_text = summary if source_name == "summary" else full_text
-    source_text = source_text or ""
+    source_text = (
+        summary
+        if source_name == "summary"
+        else full_text
+    )
+
+    source_text = (
+        source_text
+        or ""
+    )
 
     if (
         start_offset is None
@@ -142,23 +212,82 @@ def _get_evidence_context(
             "after": "",
         }
 
-    safe_end = min(end_offset, len(source_text))
-    before_start = _snap_context_start(
-        source_text,
-        max(0, start_offset - radius),
-        start_offset,
+    safe_end = min(
+        end_offset,
+        len(source_text),
     )
-    after_end = _snap_context_end(
-        source_text,
-        safe_end,
-        min(len(source_text), safe_end + radius),
+
+    before_start = (
+        _snap_context_start(
+            source_text,
+            max(
+                0,
+                start_offset - radius,
+            ),
+            start_offset,
+        )
+    )
+
+    after_end = (
+        _snap_context_end(
+            source_text,
+            safe_end,
+            min(
+                len(source_text),
+                safe_end + radius,
+            ),
+        )
     )
 
     return {
         "source": source_name,
-        "before": source_text[before_start:start_offset].strip(),
-        "quote": source_text[start_offset:safe_end].strip() or quote,
-        "after": source_text[safe_end:after_end].strip(),
+        "before": source_text[
+            before_start:start_offset
+        ].strip(),
+        "quote": (
+            source_text[
+                start_offset:safe_end
+            ].strip()
+            or quote
+        ),
+        "after": source_text[
+            safe_end:after_end
+        ].strip(),
+    }
+
+
+def _get_landmark(
+    source: str | None,
+) -> dict:
+    if not source:
+        return {
+            "label": None,
+            "year": None,
+        }
+
+    match = re.search(
+        r"n\.?\s*º?\s*(\d+)\s*/\s*(\d{4})",
+        source,
+        flags=re.IGNORECASE,
+    )
+
+    if match is None:
+        return {
+            "label": source,
+            "year": None,
+        }
+
+    number = match.group(1)
+
+    year = int(
+        match.group(2)
+    )
+
+    return {
+        "label": (
+            f"AUJ {number}/{year}"
+        ),
+        "year": year,
     }
 
 
@@ -180,7 +309,11 @@ def list_issues():
                 i.title,
                 i.question,
                 i.source,
-                COUNT(DISTINCT s.case_id) AS analyzed_cases,
+
+                COUNT(
+                    DISTINCT s.case_id
+                ) AS analyzed_cases,
+
                 SUM(
                     CASE
                         WHEN s.decides_issue = 1
@@ -188,6 +321,7 @@ def list_issues():
                         ELSE 0
                     END
                 ) AS deciding_cases,
+
                 SUM(
                     CASE
                         WHEN s.status = 'REVIEW'
@@ -195,14 +329,18 @@ def list_issues():
                         ELSE 0
                     END
                 ) AS review_cases
+
             FROM issues i
+
             LEFT JOIN stances s
                 ON s.issue_slug = i.slug
+
             GROUP BY
                 i.slug,
                 i.title,
                 i.question,
                 i.source
+
             ORDER BY i.title
             """
         ).fetchall()
@@ -213,16 +351,29 @@ def list_issues():
             "title": row["title"],
             "question": row["question"],
             "source": row["source"],
-            "analyzed_cases": row["analyzed_cases"] or 0,
-            "deciding_cases": row["deciding_cases"] or 0,
-            "review_cases": row["review_cases"] or 0,
+            "analyzed_cases": (
+                row["analyzed_cases"]
+                or 0
+            ),
+            "deciding_cases": (
+                row["deciding_cases"]
+                or 0
+            ),
+            "review_cases": (
+                row["review_cases"]
+                or 0
+            ),
         }
         for row in issues
     ]
 
 
-@app.get("/api/issues/{issue_slug}")
-def get_issue(issue_slug: str):
+@app.get(
+    "/api/issues/{issue_slug}"
+)
+def get_issue(
+    issue_slug: str,
+):
     with get_connection() as connection:
         issue = connection.execute(
             """
@@ -231,16 +382,23 @@ def get_issue(issue_slug: str):
                 title,
                 question,
                 source
+
             FROM issues
+
             WHERE slug = ?
             """,
-            (issue_slug,),
+            (
+                issue_slug,
+            ),
         ).fetchone()
 
         if issue is None:
             raise HTTPException(
                 status_code=404,
-                detail="Questão jurídica não encontrada.",
+                detail=(
+                    "Questão jurídica "
+                    "não encontrada."
+                ),
             )
 
         positions = connection.execute(
@@ -249,24 +407,39 @@ def get_issue(issue_slug: str):
                 p.id,
                 p.label,
                 p.description,
+
                 COUNT(
                     CASE
                         WHEN s.decides_issue = 1
+                         AND s.status = 'AUTO'
+                         AND EXISTS (
+                             SELECT 1
+                             FROM evidence ev
+                             WHERE ev.stance_id = s.id
+                               AND ev.verified = 1
+                         )
                         THEN 1
                     END
                 ) AS case_count
+
             FROM positions p
+
             LEFT JOIN stances s
                 ON s.position_id = p.id
                 AND s.issue_slug = p.issue_slug
+
             WHERE p.issue_slug = ?
+
             GROUP BY
                 p.id,
                 p.label,
                 p.description
+
             ORDER BY p.id
             """,
-            (issue_slug,),
+            (
+                issue_slug,
+            ),
         ).fetchall()
 
         stats = connection.execute(
@@ -276,7 +449,7 @@ def get_issue(issue_slug: str):
 
                 SUM(
                     CASE
-                        WHEN decides_issue = 1
+                        WHEN s.decides_issue = 1
                         THEN 1
                         ELSE 0
                     END
@@ -284,7 +457,7 @@ def get_issue(issue_slug: str):
 
                 SUM(
                     CASE
-                        WHEN decides_issue = 0
+                        WHEN s.decides_issue = 0
                         THEN 1
                         ELSE 0
                     END
@@ -292,7 +465,7 @@ def get_issue(issue_slug: str):
 
                 SUM(
                     CASE
-                        WHEN status = 'AUTO'
+                        WHEN s.status = 'AUTO'
                         THEN 1
                         ELSE 0
                     END
@@ -300,147 +473,472 @@ def get_issue(issue_slug: str):
 
                 SUM(
                     CASE
-                        WHEN status = 'REVIEW'
+                        WHEN s.status = 'REVIEW'
                         THEN 1
                         ELSE 0
                     END
                 ) AS review_cases,
 
+                SUM(
+                    CASE
+                        WHEN s.decides_issue = 1
+                         AND s.status = 'AUTO'
+                         AND s.position_id IS NOT NULL
+                         AND EXISTS (
+                             SELECT 1
+                             FROM evidence ev
+                             WHERE ev.stance_id = s.id
+                               AND ev.verified = 1
+                         )
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS validated_deciding_cases,
+
                 COUNT(
                     DISTINCT CASE
-                        WHEN decides_issue = 1
-                        THEN position_id
+                        WHEN s.decides_issue = 1
+                         AND s.status = 'AUTO'
+                         AND s.position_id IS NOT NULL
+                         AND EXISTS (
+                             SELECT 1
+                             FROM evidence ev
+                             WHERE ev.stance_id = s.id
+                               AND ev.verified = 1
+                         )
+                        THEN s.position_id
                     END
                 ) AS represented_positions
-            FROM stances
-            WHERE issue_slug = ?
+
+            FROM stances s
+
+            WHERE s.issue_slug = ?
             """,
-            (issue_slug,),
+            (
+                issue_slug,
+            ),
         ).fetchone()
 
-        verified_evidence = connection.execute(
-            """
-            SELECT COUNT(DISTINCT e.stance_id) AS total
-            FROM evidence e
-            JOIN stances s
-                ON s.id = e.stance_id
-            WHERE s.issue_slug = ?
-              AND e.verified = 1
-            """,
-            (issue_slug,),
-        ).fetchone()
+        verified_evidence = (
+            connection.execute(
+                """
+                SELECT
+                    COUNT(
+                        DISTINCT e.stance_id
+                    ) AS total
+
+                FROM evidence e
+
+                JOIN stances s
+                    ON s.id = e.stance_id
+
+                WHERE s.issue_slug = ?
+                  AND e.verified = 1
+                """,
+                (
+                    issue_slug,
+                ),
+            ).fetchone()
+        )
+
+        position_ranges = (
+            connection.execute(
+                """
+                SELECT
+                    s.position_id,
+                    p.label,
+
+                    MIN(
+                        c.decision_date
+                    ) AS first_date,
+
+                    MAX(
+                        c.decision_date
+                    ) AS last_date,
+
+                    COUNT(*) AS total
+
+                FROM stances s
+
+                JOIN cases c
+                    ON c.id = s.case_id
+
+                JOIN positions p
+                    ON p.id = s.position_id
+                    AND p.issue_slug = s.issue_slug
+
+                WHERE s.issue_slug = ?
+                  AND s.decides_issue = 1
+                  AND s.status = 'AUTO'
+                  AND s.position_id IS NOT NULL
+                  AND c.decision_date IS NOT NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM evidence ev
+                      WHERE ev.stance_id = s.id
+                        AND ev.verified = 1
+                  )
+
+                GROUP BY
+                    s.position_id,
+                    p.label
+
+                ORDER BY
+                    first_date,
+                    s.position_id
+                """,
+                (
+                    issue_slug,
+                ),
+            ).fetchall()
+        )
 
     represented_positions = (
-        stats["represented_positions"]
+        stats[
+            "represented_positions"
+        ]
         if stats
         else 0
     )
 
-    return {
-        "slug": issue["slug"],
-        "title": issue["title"],
-        "question": issue["question"],
-        "source": issue["source"],
+    ranges = [
+        {
+            "position_id": (
+                row[
+                    "position_id"
+                ]
+            ),
+            "label": (
+                row[
+                    "label"
+                ]
+            ),
+            "first_date": (
+                row[
+                    "first_date"
+                ]
+            ),
+            "last_date": (
+                row[
+                    "last_date"
+                ]
+            ),
+            "total": (
+                row[
+                    "total"
+                ]
+            ),
+        }
+        for row
+        in position_ranges
+    ]
 
-        "landmark": {
-            "label": issue["source"],
-            "year": 2022,
-        },
+    overlaps = []
+
+    for index, first in enumerate(
+        ranges
+    ):
+        for second in ranges[
+            index + 1:
+        ]:
+            overlap_start = max(
+                first[
+                    "first_date"
+                ],
+                second[
+                    "first_date"
+                ],
+            )
+
+            overlap_end = min(
+                first[
+                    "last_date"
+                ],
+                second[
+                    "last_date"
+                ],
+            )
+
+            if (
+                overlap_start
+                <= overlap_end
+            ):
+                overlaps.append(
+                    {
+                        "position_a": (
+                            first[
+                                "position_id"
+                            ]
+                        ),
+                        "position_b": (
+                            second[
+                                "position_id"
+                            ]
+                        ),
+                        "start_date": (
+                            overlap_start
+                        ),
+                        "end_date": (
+                            overlap_end
+                        ),
+                    }
+                )
+
+    return {
+        "slug": (
+            issue[
+                "slug"
+            ]
+        ),
+        "title": (
+            issue[
+                "title"
+            ]
+        ),
+        "question": (
+            issue[
+                "question"
+            ]
+        ),
+        "source": (
+            issue[
+                "source"
+            ]
+        ),
+
+        "landmark": (
+            _get_landmark(
+                issue[
+                    "source"
+                ]
+            )
+        ),
 
         "stats": {
-            "analyzed_cases": stats["analyzed_cases"] or 0,
-            "deciding_cases": stats["deciding_cases"] or 0,
-            "non_deciding_cases": (
-                stats["non_deciding_cases"] or 0
+            "analyzed_cases": (
+                stats[
+                    "analyzed_cases"
+                ]
+                or 0
             ),
-            "auto_cases": stats["auto_cases"] or 0,
-            "review_cases": stats["review_cases"] or 0,
+            "deciding_cases": (
+                stats[
+                    "deciding_cases"
+                ]
+                or 0
+            ),
+            "non_deciding_cases": (
+                stats[
+                    "non_deciding_cases"
+                ]
+                or 0
+            ),
+            "auto_cases": (
+                stats[
+                    "auto_cases"
+                ]
+                or 0
+            ),
+            "review_cases": (
+                stats[
+                    "review_cases"
+                ]
+                or 0
+            ),
             "verified_evidence_cases": (
-                verified_evidence["total"] or 0
+                verified_evidence[
+                    "total"
+                ]
+                or 0
             ),
             "represented_positions": (
-                represented_positions or 0
+                represented_positions
+                or 0
+            ),
+            "validated_deciding_cases": (
+                stats[
+                    "validated_deciding_cases"
+                ]
+                or 0
             ),
             "divergence_detected": (
-                represented_positions >= 2
+                represented_positions
+                >= 2
             ),
         },
 
         "positions": [
             {
-                "id": row["id"],
-                "label": row["label"],
-                "description": row["description"],
-                "case_count": row["case_count"] or 0,
+                "id": (
+                    row[
+                        "id"
+                    ]
+                ),
+                "label": (
+                    row[
+                        "label"
+                    ]
+                ),
+                "description": (
+                    row[
+                        "description"
+                    ]
+                ),
+                "case_count": (
+                    row[
+                        "case_count"
+                    ]
+                    or 0
+                ),
             }
-            for row in positions
+            for row
+            in positions
         ],
+
+        "divergence_analysis": {
+            "detected": (
+                represented_positions
+                >= 2
+            ),
+            "validated_decisions": (
+                stats[
+                    "validated_deciding_cases"
+                ]
+                or 0
+            ),
+            "position_ranges": (
+                ranges
+            ),
+            "overlaps": (
+                overlaps
+            ),
+            "scope_note": (
+                "Resultado calculado "
+                "apenas a partir de "
+                "decisões AUTO com "
+                "evidência verificada "
+                "no corpus analisado."
+            ),
+        },
     }
 
 
-@app.get("/api/issues/{issue_slug}/timeline")
-def get_timeline(issue_slug: str):
+@app.get(
+    "/api/issues/"
+    "{issue_slug}/timeline"
+)
+def get_timeline(
+    issue_slug: str,
+):
     with get_connection() as connection:
-        exists = connection.execute(
+        issue = connection.execute(
             """
-            SELECT 1
+            SELECT
+                slug,
+                source
+
             FROM issues
+
             WHERE slug = ?
             """,
-            (issue_slug,),
+            (
+                issue_slug,
+            ),
         ).fetchone()
 
-        if exists is None:
+        if issue is None:
             raise HTTPException(
                 status_code=404,
-                detail="Questão jurídica não encontrada.",
+                detail=(
+                    "Questão jurídica "
+                    "não encontrada."
+                ),
             )
 
         positions = connection.execute(
             """
-            SELECT id
+            SELECT
+                id
+
             FROM positions
+
             WHERE issue_slug = ?
+
             ORDER BY id
             """,
-            (issue_slug,),
+            (
+                issue_slug,
+            ),
         ).fetchall()
 
         rows = connection.execute(
             """
             SELECT
-                substr(c.decision_date, 1, 4) AS year,
+                substr(
+                    c.decision_date,
+                    1,
+                    4
+                ) AS year,
+
                 s.position_id,
+
                 COUNT(*) AS total
+
             FROM stances s
+
             JOIN cases c
                 ON c.id = s.case_id
+
             WHERE s.issue_slug = ?
               AND s.decides_issue = 1
+              AND s.status = 'AUTO'
               AND s.position_id IS NOT NULL
               AND c.decision_date IS NOT NULL
+              AND EXISTS (
+                  SELECT 1
+                  FROM evidence ev
+                  WHERE ev.stance_id = s.id
+                    AND ev.verified = 1
+              )
+
             GROUP BY
-                substr(c.decision_date, 1, 4),
+                substr(
+                    c.decision_date,
+                    1,
+                    4
+                ),
                 s.position_id
+
             ORDER BY
                 year,
                 s.position_id
             """,
-            (issue_slug,),
+            (
+                issue_slug,
+            ),
         ).fetchall()
 
     position_ids = [
-        row["id"]
-        for row in positions
+        row[
+            "id"
+        ]
+        for row
+        in positions
     ]
 
-    years: dict[int, dict] = {}
+    years: dict[
+        int,
+        dict,
+    ] = {}
 
     for row in rows:
         try:
             year = int(
-                row["year"]
+                row[
+                    "year"
+                ]
             )
+
         except (
             TypeError,
             ValueError,
@@ -448,8 +946,12 @@ def get_timeline(issue_slug: str):
             continue
 
         if year not in years:
-            years[year] = {
-                "year": year,
+            years[
+                year
+            ] = {
+                "year": (
+                    year
+                ),
                 "total_decisions": 0,
                 "positions": {
                     position_id: 0
@@ -458,27 +960,51 @@ def get_timeline(issue_slug: str):
                 },
             }
 
-        years[year]["positions"][
-            row["position_id"]
-        ] = row["total"]
+        years[
+            year
+        ][
+            "positions"
+        ][
+            row[
+                "position_id"
+            ]
+        ] = row[
+            "total"
+        ]
 
-        years[year]["total_decisions"] += (
-            row["total"]
-        )
+        years[
+            year
+        ][
+            "total_decisions"
+        ] += row[
+            "total"
+        ]
 
     return {
-        "landmark": {
-            "label": "AUJ 6/2022",
-            "year": 2022,
-        },
+        "landmark": (
+            _get_landmark(
+                issue[
+                    "source"
+                ]
+            )
+        ),
+
         "years": [
-            years[year]
-            for year in sorted(years)
+            years[
+                year
+            ]
+            for year
+            in sorted(
+                years
+            )
         ],
     }
 
 
-@app.get("/api/issues/{issue_slug}/cases")
+@app.get(
+    "/api/issues/"
+    "{issue_slug}/cases"
+)
 def get_cases(
     issue_slug: str,
     position_id: str | None = Query(
@@ -495,16 +1021,23 @@ def get_cases(
         exists = connection.execute(
             """
             SELECT 1
+
             FROM issues
+
             WHERE slug = ?
             """,
-            (issue_slug,),
+            (
+                issue_slug,
+            ),
         ).fetchone()
 
         if exists is None:
             raise HTTPException(
                 status_code=404,
-                detail="Questão jurídica não encontrada.",
+                detail=(
+                    "Questão jurídica "
+                    "não encontrada."
+                ),
             )
 
         conditions = [
@@ -519,6 +1052,7 @@ def get_cases(
             conditions.append(
                 "s.position_id = ?"
             )
+
             params.append(
                 position_id
             )
@@ -527,6 +1061,7 @@ def get_cases(
             conditions.append(
                 "s.status = ?"
             )
+
             params.append(
                 status.upper()
             )
@@ -535,12 +1070,17 @@ def get_cases(
             conditions.append(
                 "s.decides_issue = ?"
             )
+
             params.append(
-                int(decides_issue)
+                int(
+                    decides_issue
+                )
             )
 
-        where_clause = " AND ".join(
-            conditions
+        where_clause = (
+            " AND ".join(
+                conditions
+            )
         )
 
         rows = connection.execute(
@@ -566,23 +1106,34 @@ def get_cases(
                 s.extraction_model,
                 s.prompt_version,
 
-                p.label AS position_label,
+                p.label
+                    AS position_label,
 
                 (
                     SELECT e.quote
+
                     FROM evidence e
-                    WHERE e.stance_id = s.id
-                      AND e.verified = 1
+
+                    WHERE
+                        e.stance_id = s.id
+                        AND e.verified = 1
+
                     ORDER BY e.id
+
                     LIMIT 1
                 ) AS evidence_quote,
 
                 (
                     SELECT e.role
+
                     FROM evidence e
-                    WHERE e.stance_id = s.id
-                      AND e.verified = 1
+
+                    WHERE
+                        e.stance_id = s.id
+                        AND e.verified = 1
+
                     ORDER BY e.id
+
                     LIMIT 1
                 ) AS evidence_role
 
@@ -601,73 +1152,156 @@ def get_cases(
                 c.decision_date ASC,
                 c.process_number ASC
             """,
-            tuple(params),
+            tuple(
+                params
+            ),
         ).fetchall()
 
     return {
-        "total": len(rows),
+        "total": (
+            len(
+                rows
+            )
+        ),
+
         "cases": [
             {
-                "id": row["id"],
-                "ecli": row["ecli"],
+                "id": (
+                    row[
+                        "id"
+                    ]
+                ),
+                "ecli": (
+                    row[
+                        "ecli"
+                    ]
+                ),
                 "process_number": (
-                    row["process_number"]
+                    row[
+                        "process_number"
+                    ]
                 ),
-                "court": row["court"],
-                "section": row["section"],
-                "area": row["area"],
+                "court": (
+                    row[
+                        "court"
+                    ]
+                ),
+                "section": (
+                    row[
+                        "section"
+                    ]
+                ),
+                "area": (
+                    row[
+                        "area"
+                    ]
+                ),
                 "decision_date": (
-                    row["decision_date"]
+                    row[
+                        "decision_date"
+                    ]
                 ),
-                "rapporteur": row["rapporteur"],
+                "rapporteur": (
+                    row[
+                        "rapporteur"
+                    ]
+                ),
                 "procedural_type": (
-                    row["procedural_type"]
+                    row[
+                        "procedural_type"
+                    ]
                 ),
-                "decision": row["decision"],
-                "voting": row["voting"],
-                "summary": row["summary"],
-                "source_url": row["source_url"],
+                "decision": (
+                    row[
+                        "decision"
+                    ]
+                ),
+                "voting": (
+                    row[
+                        "voting"
+                    ]
+                ),
+                "summary": (
+                    row[
+                        "summary"
+                    ]
+                ),
+                "source_url": (
+                    row[
+                        "source_url"
+                    ]
+                ),
 
                 "stance": {
-                    "decides_issue": bool(
-                        row["decides_issue"]
+                    "decides_issue": (
+                        bool(
+                            row[
+                                "decides_issue"
+                            ]
+                        )
                     ),
                     "position_id": (
-                        row["position_id"]
+                        row[
+                            "position_id"
+                        ]
                     ),
                     "position_label": (
-                        row["position_label"]
+                        row[
+                            "position_label"
+                        ]
                     ),
-                    "status": row["status"],
+                    "status": (
+                        row[
+                            "status"
+                        ]
+                    ),
                     "model": (
-                        row["extraction_model"]
+                        row[
+                            "extraction_model"
+                        ]
                     ),
                     "prompt_version": (
-                        row["prompt_version"]
+                        row[
+                            "prompt_version"
+                        ]
                     ),
                 },
 
                 "evidence": (
                     {
                         "quote": (
-                            row["evidence_quote"]
+                            row[
+                                "evidence_quote"
+                            ]
                         ),
                         "role": (
-                            row["evidence_role"]
+                            row[
+                                "evidence_role"
+                            ]
                         ),
                         "verified": True,
                     }
-                    if row["evidence_quote"]
+                    if row[
+                        "evidence_quote"
+                    ]
                     else None
                 ),
             }
-            for row in rows
+            for row
+            in rows
         ],
     }
 
 
-@app.get("/api/issues/{issue_slug}/cases/{case_id}")
-def get_case_detail(issue_slug: str, case_id: int):
+@app.get(
+    "/api/issues/"
+    "{issue_slug}/cases/"
+    "{case_id}"
+)
+def get_case_detail(
+    issue_slug: str,
+    case_id: int,
+):
     with get_connection() as connection:
         row = connection.execute(
             """
@@ -699,14 +1333,21 @@ def get_case_detail(issue_slug: str, case_id: int):
 
                 p.id AS position_id,
                 p.label AS position_label,
-                p.description AS position_description,
+                p.description
+                    AS position_description,
 
                 e.id AS evidence_id,
                 e.quote AS evidence_quote,
                 e.role AS evidence_role,
-                e.start_offset AS evidence_start_offset,
-                e.end_offset AS evidence_end_offset,
-                e.verified AS evidence_verified
+
+                e.start_offset
+                    AS evidence_start_offset,
+
+                e.end_offset
+                    AS evidence_end_offset,
+
+                e.verified
+                    AS evidence_verified
 
             FROM cases c
 
@@ -730,73 +1371,298 @@ def get_case_detail(issue_slug: str, case_id: int):
             ORDER BY
                 e.id ASC
             """,
-            (case_id, issue_slug),
+            (
+                case_id,
+                issue_slug,
+            ),
         ).fetchone()
 
     if row is None:
         raise HTTPException(
             status_code=404,
-            detail="Acórdão não encontrado.",
+            detail=(
+                "Acórdão não "
+                "encontrado."
+            ),
         )
 
-    evidence_context = _get_evidence_context(
-        summary=row["summary"],
-        full_text=row["full_text"],
-        role=row["evidence_role"],
-        start_offset=row["evidence_start_offset"],
-        end_offset=row["evidence_end_offset"],
-        quote=row["evidence_quote"],
+    evidence_context = (
+        _get_evidence_context(
+            summary=(
+                row[
+                    "summary"
+                ]
+            ),
+            full_text=(
+                row[
+                    "full_text"
+                ]
+            ),
+            role=(
+                row[
+                    "evidence_role"
+                ]
+            ),
+            start_offset=(
+                row[
+                    "evidence_start_offset"
+                ]
+            ),
+            end_offset=(
+                row[
+                    "evidence_end_offset"
+                ]
+            ),
+            quote=(
+                row[
+                    "evidence_quote"
+                ]
+            ),
+        )
     )
 
     return {
-        "id": row["id"],
-        "ecli": row["ecli"],
-        "process_number": row["process_number"],
-        "court": row["court"],
-        "section": row["section"],
-        "area": row["area"],
-        "decision_date": row["decision_date"],
-        "rapporteur": row["rapporteur"],
-        "procedural_type": row["procedural_type"],
-        "decision": row["decision"],
-        "voting": row["voting"],
-        "source_url": row["source_url"],
+        "id": (
+            row[
+                "id"
+            ]
+        ),
+        "ecli": (
+            row[
+                "ecli"
+            ]
+        ),
+        "process_number": (
+            row[
+                "process_number"
+            ]
+        ),
+        "court": (
+            row[
+                "court"
+            ]
+        ),
+        "section": (
+            row[
+                "section"
+            ]
+        ),
+        "area": (
+            row[
+                "area"
+            ]
+        ),
+        "decision_date": (
+            row[
+                "decision_date"
+            ]
+        ),
+        "rapporteur": (
+            row[
+                "rapporteur"
+            ]
+        ),
+        "procedural_type": (
+            row[
+                "procedural_type"
+            ]
+        ),
+        "decision": (
+            row[
+                "decision"
+            ]
+        ),
+        "voting": (
+            row[
+                "voting"
+            ]
+        ),
+        "source_url": (
+            row[
+                "source_url"
+            ]
+        ),
+
         "issue": (
             {
-                "slug": row["issue_slug"],
-                "title": row["issue_title"],
-                "question": row["issue_question"],
-                "source": row["issue_source"],
+                "slug": (
+                    row[
+                        "issue_slug"
+                    ]
+                ),
+                "title": (
+                    row[
+                        "issue_title"
+                    ]
+                ),
+                "question": (
+                    row[
+                        "issue_question"
+                    ]
+                ),
+                "source": (
+                    row[
+                        "issue_source"
+                    ]
+                ),
             }
-            if row["issue_slug"]
+            if row[
+                "issue_slug"
+            ]
             else None
         ),
+
         "position": (
             {
-                "id": row["position_id"],
-                "label": row["position_label"],
-                "description": row["position_description"],
+                "id": (
+                    row[
+                        "position_id"
+                    ]
+                ),
+                "label": (
+                    row[
+                        "position_label"
+                    ]
+                ),
+                "description": (
+                    row[
+                        "position_description"
+                    ]
+                ),
             }
-            if row["position_id"]
+            if row[
+                "position_id"
+            ]
             else None
         ),
+
         "decides_issue": (
-            bool(row["decides_issue"])
-            if row["decides_issue"] is not None
+            bool(
+                row[
+                    "decides_issue"
+                ]
+            )
+            if row[
+                "decides_issue"
+            ]
+            is not None
             else False
         ),
-        "status": row["status"],
-        "model": row["extraction_model"],
-        "prompt_version": row["prompt_version"],
+
+        "status": (
+            row[
+                "status"
+            ]
+        ),
+
+        "model": (
+            row[
+                "extraction_model"
+            ]
+        ),
+
+        "prompt_version": (
+            row[
+                "prompt_version"
+            ]
+        ),
+
         "evidence": (
             {
-                "id": row["evidence_id"],
-                "quote": row["evidence_quote"],
-                "role": row["evidence_role"],
-                "verified": bool(row["evidence_verified"]),
-                "context": evidence_context,
+                "id": (
+                    row[
+                        "evidence_id"
+                    ]
+                ),
+                "quote": (
+                    row[
+                        "evidence_quote"
+                    ]
+                ),
+                "role": (
+                    row[
+                        "evidence_role"
+                    ]
+                ),
+                "verified": (
+                    bool(
+                        row[
+                            "evidence_verified"
+                        ]
+                    )
+                ),
+                "context": (
+                    evidence_context
+                ),
             }
-            if row["evidence_id"]
+            if row[
+                "evidence_id"
+            ]
             else None
         ),
     }
+    
+@app.post(
+    "/api/issues/{issue_slug}/chat"
+)
+def chat_issue(
+    issue_slug: str,
+    payload: ChatRequest,
+):
+    question = (
+        payload.question
+        .strip()
+    )
+
+    if not question:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "A pergunta não pode "
+                "estar vazia."
+            ),
+        )
+
+    with get_connection() as connection:
+        issue = connection.execute(
+            """
+            SELECT slug
+            FROM issues
+            WHERE slug = ?
+            """,
+            (
+                issue_slug,
+            ),
+        ).fetchone()
+
+    if issue is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Questão jurídica "
+                "não encontrada."
+            ),
+        )
+
+    try:
+        return answer_issue_question(
+            issue_slug,
+            question,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(
+                exc
+            ),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Não foi possível gerar "
+                "a resposta do assistente."
+            ),
+        ) from exc
