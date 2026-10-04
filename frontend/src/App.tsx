@@ -402,7 +402,7 @@ function App() {
             data,
           )
         } catch (
-          err
+        err
         ) {
           setError(
             err instanceof Error
@@ -510,7 +510,7 @@ function App() {
             casesData.cases,
           )
         } catch (
-          err
+        err
         ) {
           setError(
             err instanceof Error
@@ -572,7 +572,7 @@ function App() {
             data,
           )
         } catch (
-          err
+        err
         ) {
           setCaseDetail(
             null,
@@ -831,7 +831,7 @@ function App() {
         data,
       )
     } catch (
-      err
+    err
     ) {
       setChatError(
         err instanceof Error
@@ -864,9 +864,9 @@ function App() {
                   string,
                   string | number
                 > = {
-                  year:
-                    item.year,
-                }
+                year:
+                  item.year,
+              }
 
               for (
                 const position
@@ -876,7 +876,7 @@ function App() {
                   position.id
                 ] =
                   item.positions[
-                    position.id
+                  position.id
                   ]
                   ?? 0
               }
@@ -1525,8 +1525,8 @@ function App() {
                           }
                           stroke={
                             POSITION_COLORS[
-                              index
-                              % POSITION_COLORS.length
+                            index
+                            % POSITION_COLORS.length
                             ]
                           }
                           strokeWidth={
@@ -1683,8 +1683,8 @@ function App() {
                       return (
                         courtTime
                           .courts[
-                            index
-                          ]
+                        index
+                        ]
                         ?? ''
                       )
                     }
@@ -1734,8 +1734,8 @@ function App() {
                           }
                           fill={
                             POSITION_COLORS[
-                              index
-                              % POSITION_COLORS.length
+                            index
+                            % POSITION_COLORS.length
                             ]
                           }
                           cursor="pointer"
@@ -1748,7 +1748,7 @@ function App() {
                                 (
                                   entry as {
                                     payload?:
-                                      CourtTimePoint
+                                    CourtTimePoint
                                   }
                                 )
                                   .payload
@@ -1794,7 +1794,7 @@ function App() {
                         (
                           entry as {
                             payload?:
-                              CourtTimePoint
+                            CourtTimePoint
                           }
                         )
                           .payload
@@ -2192,10 +2192,9 @@ function HomePage({
                       currentIssue.slug
                     }
                     className={
-                      `position-card ${
-                        index % 2 === 0
-                          ? 'primary'
-                          : 'secondary'
+                      `position-card ${index % 2 === 0
+                        ? 'primary'
+                        : 'secondary'
                       }`
                     }
                     role="button"
@@ -2581,11 +2580,10 @@ function CorpusChat({
             && (
               <div
                 className={
-                  `chat-response ${
-                    response
-                      .insufficient_evidence
-                      ? 'insufficient'
-                      : ''
+                  `chat-response ${response
+                    .insufficient_evidence
+                    ? 'insufficient'
+                    : ''
                   }`
                 }
               >
@@ -2792,8 +2790,8 @@ function PositionCard({
 }: {
   position: Position
   variant:
-    | 'primary'
-    | 'secondary'
+  | 'primary'
+  | 'secondary'
 }) {
   return (
     <article
@@ -2841,7 +2839,7 @@ function PositionCard({
         } {
           position
             .case_count
-          === 1
+            === 1
             ? 'decisão com evidência verificada'
             : 'decisões com evidência verificada'
         }
@@ -2863,10 +2861,9 @@ function FilterButton({
   return (
     <button
       className={
-        `filter-button ${
-          active
-            ? 'active'
-            : ''
+        `filter-button ${active
+          ? 'active'
+          : ''
         }`
       }
       onClick={
@@ -2925,9 +2922,9 @@ function CaseCard({
     isReview
       ? 'Em revisão'
       : item
-          .stance
-          .position_label
-        ?? 'Sem posição'
+        .stance
+        .position_label
+      ?? 'Sem posição'
 
   const variant =
     getPositionVariant(
@@ -2940,10 +2937,9 @@ function CaseCard({
   return (
     <article
       className={
-        `case-card ${
-          isReview
-            ? 'case-card-review'
-            : ''
+        `case-card ${isReview
+          ? 'case-card-review'
+          : ''
         }`
       }
       onClick={
@@ -3007,10 +3003,9 @@ function CaseCard({
         >
           <span
             className={
-              `position-badge ${
-                isReview
-                  ? 'review'
-                  : variant
+              `position-badge ${isReview
+                ? 'review'
+                : variant
               }`
             }
           >
@@ -3024,7 +3019,7 @@ function CaseCard({
 
       {
         item.evidence
-        && !isReview
+          && !isReview
           ? (
             <blockquote>
               “{
@@ -3089,15 +3084,15 @@ function CaseDetailModal({
   onClose,
 }: {
   detail:
-    CaseDetail | null
+  CaseDetail | null
   positions:
-    Position[]
+  Position[]
   error:
-    string | null
+  string | null
   loading:
-    boolean
+  boolean
   onClose:
-    () => void
+  () => void
 }) {
   const isReview =
     detail?.status
@@ -3235,10 +3230,9 @@ function CaseDetailModal({
                 >
                   <span
                     className={
-                      `position-badge ${
-                        isReview
-                          ? 'review'
-                          : variant
+                      `position-badge ${isReview
+                        ? 'review'
+                        : variant
                       }`
                     }
                   >
@@ -3246,9 +3240,9 @@ function CaseDetailModal({
                       isReview
                         ? 'Em revisão'
                         : detail
-                            .position
-                            ?.label
-                          ?? 'Sem posição'
+                          .position
+                          ?.label
+                        ?? 'Sem posição'
                     }
                   </span>
                 </div>
@@ -3307,8 +3301,11 @@ function CaseDetailModal({
 
                   <dd>
                     {
-                      detail.status
-                      ?? '—'
+                      detail.status === 'AUTO'
+                        ? 'Evidência verificada'
+                        : detail.status === 'REVIEW'
+                          ? 'Em revisão'
+                          : '-'
                     }
                   </dd>
                 </div>
@@ -3360,7 +3357,7 @@ function CaseDetailModal({
                 {
                   detail
                     .evidence
-                  && !isReview
+                    && !isReview
                     ? (
                       <>
                         {
@@ -3446,7 +3443,7 @@ function CourtTimeTooltip({
   active?: boolean
   payload?: Array<{
     payload:
-      CourtTimePoint
+    CourtTimePoint
   }>
 }) {
   if (
@@ -3568,8 +3565,8 @@ function splitChatAnswer(
     paragraphs.length
       ? paragraphs
       : [
-          normalized,
-        ]
+        normalized,
+      ]
   )
 }
 
@@ -3631,22 +3628,22 @@ function formatDate(
   return (
     value
       ? new Intl.DateTimeFormat(
-          'pt-PT',
-          {
-            day:
-              '2-digit',
+        'pt-PT',
+        {
+          day:
+            '2-digit',
 
-            month:
-              '2-digit',
+          month:
+            '2-digit',
 
-            year:
-              'numeric',
-          },
-        ).format(
-          new Date(
-            `${value}T00:00:00Z`,
-          ),
-        )
+          year:
+            'numeric',
+        },
+      ).format(
+        new Date(
+          `${value}T00:00:00Z`,
+        ),
+      )
       : 'Data não disponível'
   )
 }
